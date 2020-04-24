@@ -1,0 +1,1127 @@
+---
+title: "Cours Robustesse et Modèles"
+author: "Cyprien Ferraris"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    number_sections: yes
+    toc: yes
+bibliography: biblio.bib
+---
+
+```{r setup}
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(cowplot)
+library(pracma) #pour le calcul de l'intégrale
+library(doParallel) #pas utilisé
+library(EnvStats)
+library(VaRES)
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.align = "center",
+	fig.retina = 2,
+	fig.width = 10,
+	message = FALSE,
+	warning = FALSE,
+	cache = FALSE,
+	cache.lazy = FALSE
+)
+```
+
+
+Fonctions de simulations de lois : 
+```{r}
+#loi exponentielle
+rexp2 <- function(size, lambda = 1){
+  return( -log(1- runif(size) )/ lambda)
+}
+#loi de laplace standard
+rlaplace2 <- function(size){
+  return( 2*((runif(size)>0.5) -1 )* rexp2(size) )
+}
+
+# loi normale
+rnorm2 <- function(size, mean = 0, sd = 1){
+  
+  #densité loi de laplace
+  dlaplace <- function(x){
+    return(exp(-abs(x))/2)  
+  }
+  
+  i <- 1
+  norm_vec <- c()
+  const <- sqrt(2*exp(1)/pi)
+  while(i <=size ){
+    u <- runif(1)
+    y <- rlaplace2(1)
+    if(const * u * dlaplace(y) <= dnorm(y)){
+      norm_vec <- c(norm_vec,y)
+      i <- i + 1
+    }
+  }
+  return(norm_vec)
+}
+```
+
+
+```{r}
+test_normal <- function(x,t){
+  return( (1 - pnorm(2*t - x) ) * (1 - pnorm(x) ) / (1-pnorm(t,0,0.5)) )
+}
+```
+
+# Mauvaise spécification
+
+L'objectif est de déterminer empiriquement la où l'évènement $B_t = \{ \frac{X_1 + X_2}{2} > t \}$, lorque t est "grand". 
+
+On commence par regarder le cas où les variables sont de lois normales indépendantes.
+
+## Cas Normal
+
+On peut commencer par regarder la forme de ses lignes de niveau : 
+
+```{r}
+# Densité de probabilité gaussienne dans R^2
+gaussian_density <- function(x,y){
+  return( exp( -0.5 * ( x^2 + y^2 ) ) / (2*pi) )
+}
+
+# On génère une grille d coordonnées (x,y), ainsi que la densité associée
+x = seq(-3,3,0.01)
+y = seq(-3,3,0.01)
+don_gauss <- expand_grid(x, y) %>%
+  mutate( gauss_density = gaussian_density(x,y))
+
+# Représentation graphique
+ggplot( data = don_gauss ) +
+  aes( x = x, y = y, z = gauss_density ) +
+  geom_raster( aes( fill = gauss_density ) ) +
+  scale_fill_distiller(palette = "Spectral", direction = -1) +
+  geom_contour( colour = "white" ) +
+  # scale_x_continuous( limits = c(-3,3) ) +
+  # scale_y_continuous( limits = c(-3,3) ) +
+  coord_fixed( ratio = 1 ) +
+  theme_minimal() +
+  ggtitle("Lignes de niveau de la densité d'un couple de V.A. gaussiennes centrées réduites") +
+  theme( plot.title = element_text(hjust = 0.5) )
+```
+
+Du fait de la forme, on s'attend à ce que la probabilité soit plus forte quand $X_1 = X_2 = t$.
+
+Cela peut se montrer facilement. Notons $U= \frac{X_1 + X_2}{2}$, $V= \frac{X_1 - X_2}{2}$ et $S = X_1 + X_2$. U et V sont elles aussi deux variables indépendantes distribuées selon une loi normale centrée réduite. On a alors pour tout a positif,
+$$
+\{ \frac{X_1}{a}, \frac{X_2}{a} \} | S \geq 2a \overset{d}{\sim}
+\{ \frac{U}{a}, \frac{U}{a} \} + \{ \frac{V}{a}, \frac{-V}{a} \} | U \geq a
+$$
+Par indépendance des variables U et V, on a que $\{ \frac{V}{a}, \frac{-V}{a} \} \underset{n \rightarrow \infty}{\longrightarrow} (0,0)$.
+
+De plus comme U est gaussienne, conditionnelement à $U \geq a$ on en déduit que $U/a \rightarrow 1$ lorsque a tend vers l'infini. Finalement
+$$
+\{ \frac{X_1}{a}, \frac{X_2}{a} \} | S \geq 2a \underset{n \rightarrow \infty}{\longrightarrow} (1,1)
+$$
+On retrouve bien que si la somme de deux variables gaussienne est grande, alors les deux variables sont grandes. 
+
+```{r eval=FALSE, include=FALSE}
+xpoints <- seq(-3,4,length.out = 10000)
+g1 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_normal(y,1) ) ) )+
+  labs(x = "",y = "", title = "for t = 1") +
+  geom_vline(xintercept = 1, col = 'red')
+
+xpoints <- seq(-1,6,length.out = 10000)
+g2 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_normal(y,2) ) ) ) +
+  labs(x = "",y = "", title = "for t = 2")+
+  geom_vline(xintercept = 2, col = 'red')
+
+xpoints <- seq(3,10,length.out = 10000)
+g3 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_normal(y,4) ) ) )+
+  labs(x = "",y = "", title = "for t = 4")+
+  geom_vline(xintercept = 4, col = 'red')
+
+plot_grid(g1,g2,g3)
+```
+
+On regarde maintenant une loi de Cauchy. 
+
+## Cas Cauchy
+
+Pour deux variables de lois de Cauchy indépendantes, les courbes de niveaux sont de la forme :
+```{r}
+cauchy_density <- function(x,y){
+  return( 1 / ( pi^2 * (1+x^2) * (1+y^2) ) )
+}
+
+# On génère une grille d coordonnées (x,y), ainsi que la densité associée
+x = seq(-3,3,0.01)
+y = seq(-3,3,0.01)
+don_cauchy <- expand_grid(x, y) %>%
+  mutate( cauchy_density = cauchy_density(x,y))
+
+# Représentation graphique
+ggplot( data = don_cauchy ) +
+  aes( x = x, y = y, z = cauchy_density ) +
+  geom_raster( aes( fill = cauchy_density ) ) +
+  scale_fill_distiller(palette = "Spectral", direction = -1) +
+  geom_contour( colour = "white" ) +
+  # scale_x_continuous( limits = c(-3,3) ) +
+  # scale_y_continuous( limits = c(-3,3) ) +
+  coord_fixed( ratio = 1 ) +
+  theme_minimal() +
+  ggtitle("Lignes de niveau de la densité d'un couple de V.A. de Cauchy") +
+  theme( plot.title = element_text(hjust = 0.5) )
+```
+
+On observe que contrairement au cas gaussien, lorsque la somme est grande, seulement une des deux variables est grande.
+
+Soit $\epsilon > 0$ et soit $t>0$, on a
+$\begin{eqnarray}
+P(X_1 > t \epsilon, X_2 > t \epsilon | X_1 + X_2 > 2t)
+& = & \frac{P(X_1 > t \epsilon, X_2 > t \epsilon, X_1 + X_2 > 2t)}{P(X_1 + X_2 > 2t)}\\
+& > & \frac{P(X_1 > t \epsilon , X_2 > t \epsilon)}{P(X_1 + X_2 > 2t)}
+\end{eqnarray}$
+Comme $(X_1 + X_2)/2$ suit aussi une loi de Cauchy, on obtient quand $t \rightarrow \infty$ :
+$$
+P(X_1 > t \epsilon, X_2 > t \epsilon | X_1 + X_2 > 2t) 
+\sim \frac{t}{(t\epsilon)^2} \rightarrow 0
+$$
+On retrouve le fait que lorsque la somme est grande, les deux variables ne sont pas grandes, seulement l'une d'entre elle l'est.
+
+
+```{r eval=FALSE, include=FALSE}
+#On s'attend alors cette fois si à ce que la probabilité la plus #grande ne soit pas au centre. Et c'est bien ce que l'on observe.
+
+test_cauchy <- function(x,t){
+  return( (1 - pcauchy(2*t - x) ) * (1 - pcauchy(x) ) )
+}
+t <- c(1,2,10)
+
+color_vec <- rainbow(length(t))
+
+xpoints <- seq(-10,15,length.out = 10000)
+
+g1 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_cauchy(y,1) ) ) )+
+  labs(x = "",y = "", title = "for t = 1")
+
+xpoints <- seq(-20,25,length.out = 10000)
+g2 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_cauchy(y,2) ) ) ) +
+  labs(x = "",y = "", title = "for t = 2")
+
+xpoints <- seq(-100,100,length.out = 10000)
+g3 <- ggplot() + 
+  geom_line(aes_string(x =xpoints,y= sapply(xpoints, function(y) test_cauchy(y,10) ) ) )+
+  labs(x = "",y = "", title = "for t = 10")
+
+plot_grid(g1,g2,g3)
+```
+
+## Comparaison entre loi de Cauchy et loi normale
+
+On regarde les lois standards (pas de décentrage et facteur d'échelle égal à 1).
+
+On va regarder la différence entre leurs densités respectives (en rouge cauchy, en vert normale) :
+
+```{r}
+cauchy_ratio <- function(x,a){
+  return(pi * (x**2 + a**2) )
+}
+dcauchy <- function(x, a=1){
+  if(length(x)> 1){
+    return(sapply(x, function(y) a / cauchy_ratio(y,a) ) )
+  }else{
+    return( a / cauchy_ratio(x,a) )
+  }
+}
+xseq <- seq(-6,6, length.out = 1000)
+ynorm <- dnorm(xseq)
+ycauchy <- dcauchy(xseq)
+
+ggplot() + geom_line(aes(xseq, ynorm), col = "blue") +
+  geom_line(aes(xseq, ycauchy), col = "red")
+```
+
+On voit que les deux densités on la même forme au centre de la distribution mais les queues de distribution de la loi de Cauchy sont biens plus importantes que celles de la loi normale. Et on voit clairement la différence entre les deux.
+
+Ainsi sur le compact [-2,2], en ajustant la forme de la loi normale, on observe que les lois se ressemblent fortement.
+
+```{r}
+xseq <- seq(-2,2, length.out = 1000)
+ynorm <- dnorm(xseq,0,1.25)
+ycauchy <- dcauchy(xseq, a = 1)
+
+ggplot() + geom_line(aes(xseq, ynorm), col = "blue") +
+  geom_line(aes(xseq, ycauchy), col = "red") +
+  xlim(-6,6)
+```
+
+# Comparaison lois à queue lourde / queue légère
+
+
+## Loi Normale
+Soit X un échantillon de taille n tiré selon une loi normale qui est une loi à queue légère.
+On affiche en rouge le maximum de l'échantillon $X_1,\cdots, X_i$, en vert le minimum et en bleu la différence entre le min et le max. 
+Enfin on affiche la différence entre les max $X_1,\cdots, X_i$ et le max de $X_1,\cdots, X_{i+1}$
+```{r}
+set.seed(0)
+n <- 10000
+X <- rnorm2(n)
+
+X_max <- sapply(1:n, function(i) max(X[1:i]))
+X_min <- sapply(1:n, function(i) min(X[1:i]))
+
+X_etendue <- X_max - X_min
+
+X_p_etendue <- sapply(2:n, function(i) max( sort(X[2:i]) - sort(X[1:(i-1)]) ) )
+
+data_print <- data.frame("X" = X,"nb_simulations" = 1:n, "min" = X_min, "max" = X_max, "etendue" = X_etendue)
+
+
+g1 <- ggplot(data = data_print) +
+  geom_line(aes(nb_simulations, max),colour = "red") + 
+  geom_line(aes(nb_simulations, min), colour = "green") + 
+  geom_line(aes(nb_simulations, etendue), colour = "blue")
+
+g2 <- ggplot() + geom_line(aes(2:n,X_p_etendue))
+  
+plot_grid(g1,g2)
+```
+
+On observe qu'au bout d'un moment, les indices observées sont constant ce qui est caractéristique des lois à queue légère : à partir d'un certain temps la probabilité d'avoir une valeur grande par rapport aux autres est faible. 
+
+## Loi de Student à 4 degré de liberté
+
+On refait la même chose mais cette fois ci avec une loi de student à 4 degrés de liberté qui est une loi à queue lourde.
+```{r}
+set.seed(0)
+n <- 10000
+X <- rt(n,4)
+
+X_max <- sapply(1:n, function(i) max(X[1:i]))
+X_min <- sapply(1:n, function(i) min(X[1:i]))
+
+X_etendue <- X_max - X_min
+
+
+X_p_etendue <- sapply(2:n, function(i) max( sort(X[2:i]) - sort(X[1:(i-1)]) ) )
+
+data_print <- data.frame("X" = X,"nb_simulations" = 1:n, "min" = X_min, "max" = X_max, "etendue" = X_etendue)
+
+
+g1 <- ggplot(data = data_print) +
+  geom_line(aes(nb_simulations, max),colour = "red") + 
+  geom_line(aes(nb_simulations, min), colour = "green") + 
+  geom_line(aes(nb_simulations, etendue), colour = "blue")
+
+g2 <- ggplot() + geom_line(aes(2:n,X_p_etendue))
+  
+plot_grid(g1,g2)
+```
+
+Ici, au contraire, les valeurs ne sont pas constantes à partir d'un certain temps, au contraire, elles continuent d'augementer.
+
+Pour plus de résultats sur les différences de comportements des sommes de variables à queues lourdes et queues légères, voir par exemple [@BRONIATOWSKI199512] et [@BARBE2004465]. 
+
+# Wilcoxon : distribution sous $H_0$ et test non paramétrique 
+
+Dans cette partie, on regarde le test de wilcoxon. Plus précisement, On observe la distribution sous H0 du test de Wilcoxon. On affiche la distribution sous H0 (estimée par simulation) dans différents cas et on affiche la statistique de test (en vert) et les quantiles obtenus par simulation. Si la statistique est à l'intérieur de l'intervalle définis par les quantiles, on ne rejette pas H0 au niveau associé aux quantiles.
+
+```{r}
+k <- 50
+
+wilcox_null_distribution <- function(n){
+  X <- runif(n)
+  Y <- runif(n)
+  R <- sum( sapply(X, function(x) length(which(x-Y > 0)) ) )
+  return(R)
+}
+
+dhist_w_n <- sort(replicate(10000, wilcox_null_distribution(k)))
+
+wilcox_test <- function(data1,data2,alpha){
+  stat <- sum( sapply(data1, function(z) length( which(z-data2 > 0) ) ) )
+  q <- alpha/2
+  g <- ggplot() + geom_histogram(aes(dhist_w_n, y = ..density..), bins = 50 ) +
+    geom_vline(aes(xintercept = stat), col = "green") +
+    geom_vline(aes(xintercept = dhist_w_n[floor(10000 * q)]), col = "red") +
+    geom_vline(aes(xintercept = dhist_w_n[floor(10000 * (1-q))]), col = "red")
+  return(g)
+}
+
+set.seed(123765)
+X <- rnorm2(k,0,1)
+Y <- rnorm2(k,1,2)
+g1 <- wilcox_test(X,Y,0.05)+
+  labs(x = "",y = "", title = "change in mean and sd")
+
+X <- rnorm2(k)
+Y <- rnorm2(k,0.2)
+g2 <- wilcox_test(X,Y,0.05)+
+  labs(x = "",y = "", title = "light change in mean")
+
+X <- rnorm2(k,0,1)
+Y <- rnorm2(k,0,3)
+g3 <- wilcox_test(X,Y,0.05)+
+  labs(x = "",y = "", title = "change in sd")
+
+X <- rnorm2(k,0,0.5)
+Y <- rnorm2(k,1,0.5)
+g4 <- wilcox_test(X,Y,0.05)+
+  labs(x = "",y = "", title = "large change in mean")
+
+X <- rnorm2(k,0,0.5)
+Y <- rnorm2(k,0,0.5)
+g5 <- wilcox_test(X,Y,0.05)+
+  labs(x = "",y = "", title = "same distribution")
+
+plot_grid(g1,g2,g3,g4,g5, ncol =2)
+```
+On observe alors que le test est efficace pour détecter des distributions différentes.
+
+Remarques : 
+
+1. Soit X et Y deux variables aléatoires indépendantes de même loi, alors X - Y est symétrique : $P(X-Y \leq x) = P(Y - X \geq - x) = 1 - P(Y-X \leq -x) = 1 - P(X-Y \leq -x)$. 
+
+2. Soit $X_1, \dots, X_n$ un échantillon aléatoire, on note $X_{(i)}$ la i-ème statistique de rang et $F_n$ (respectivement $F_n^{<-}$) sa fonction de répartion empirique (son inverse de Levy empirique), alors on a $X_(i) = F_n^{<-}( \frac in)$.
+En effet, $F_n(X_{(i)}) \geq \frac in$.
+Donc $X_{(i)} \in \{ x \in \mathbb{R} | F_n(x) \geq \frac in \}$ et donc $X_{(i)} \geq inf \{ x \in \mathbb{R} | F_n(x) \geq \frac in \}$, i.e. $X_{(i)} \geq F_n^{<-}( \frac in)$.
+Supposons que $X_{(i)} > F_n^{<-}( \frac in)$. On a alors $X_{(i)} > inf \{ x \in \mathbb{R} | F_n(x) \geq \frac in \}$, donc il existe $x_0$ tel que $x_0 < F_n(X_{(i)})$ et $F_n(x_0) \geq \frac in$. D'où
+\begin{eqnarray}
+F_n(x_0) & = &
+\frac 1n \sum_{j=1}^n 1_{X_{(j)} \leq x_0}\\
+& = & \frac 1n \sum_{j=1}^{i-1} 1_{X_{(j)} \leq x_0} + \frac 1n \sum_{j=i}^{n} 1_{X_{(j)} \leq x_0}
+\end{eqnarray}
+Donc $F_n(x_0) < \frac in$ Impossible, d'où le résultat.
+
+3. Soit $P_n = \frac 1n \sum_{i=1}^n \delta_{ \frac in}$ et f continue bornée sur $\mathbb{R}$, on a 
+$$\int_{\mathbb{R}} f dP_n = \frac 1n \sum_{i=1}^n f(\frac in) = \frac{1-0}{n} \sum_{i=1}^n f(0 + i \frac{1-0}{n})$$
+On a donc une somme de Riemann, d'où 
+$$\int_{\mathbb{R}} f dP_n \underset{n \rightarrow \infty}{\longrightarrow} \int f(x)1_{[0,1]}(x)dx$$
+Donc 
+$$P_n \overset{Loi}{\underset{n \rightarrow \infty}{\longrightarrow}} Unif([0,1])$$
+
+# Divergences et estimation
+
+Pour plus de détails sur cette séction voir [@div2].
+
+L'idée est de construire des estimateurs basés sur les divergences [@div1]. Cette classe de fonctions regroupent notament le maximum de vraisemblence, la divergence du $\chi^2$ ou encore la divergence de Kullbach-Leibler.
+
+## Idée de démonstration
+
+Soit un modèle paramétrique $P = \{ p_\theta, \theta \in \Theta \}$, $\psi$ une fonction convexe. Soit $\theta_T \in \Theta$ et soient $X_1, \dots, X_n \overset{iid}{\sim} p_{\theta_T}$. L'objectif est de déterminer une procédure d'estimation de $\theta_T$. Soient $theta,\alpha \in \Theta$, on note :
+$$
+\phi(p_\theta, p_{\theta_T}) = \int \psi \left ( \frac{p_\theta}{p_{\theta_T}} \right )p_{\theta_T}
+$$
+Par convexité de $\psi$ :
+\begin{eqnarray}
+\psi \left ( \frac{p_\theta}{p_{\theta_T}} \right ) & \geq &
+\psi' \left ( \frac{p_\theta}{p_{\alpha}} \right ) \left( \frac{p_\theta}{p_{\theta_T}} - \frac{p_\theta}{p_{\alpha}} \right )  + \psi \left ( \frac{p_\theta}{p_{\alpha}} \right )\\
+
+& \geq & \psi' \left ( \frac{p_\theta}{p_{\alpha}} \right ) \frac{p_\theta}{p_{\theta_T}} - \psi' \left ( \frac{p_\theta}{p_{\alpha}} \right ) \frac{p_\theta}{p_\alpha} + \psi \left ( \frac{p_\theta}{p_{\alpha}} \right )\\
+
+& \geq & \psi' \left ( \frac{p_\theta}{p_{\alpha}} \right ) \frac{p_\theta}{p_{\theta_T}} -  \left [ \psi' \left ( \frac{p_\theta}{p_{\alpha}} \right ) \frac{p_\theta}{p_\alpha} - \psi \left ( \frac{p_\theta}{p_{\alpha}} \right ) \right ]
+\end{eqnarray}
+
+En notant $\psi^\sharp = id \cdot \psi ' - \psi$, alors
+\begin{eqnarray}
+\psi \left ( \frac{p_\theta}{p_{\theta_T}} \right )
+
+& \geq & \psi'\left ( \frac{p_\theta}{p_{\alpha}} \right )
+
+\frac{p_\theta}{p_\alpha} - \psi^\sharp 
+\left ( \frac{p_\theta}{p_{\alpha}} \right )\\
+
+\int \psi \left ( \frac{p_\theta}{p_{\theta_T}} \right ) p_{\theta_T}
+& \geq &  
+\int \left ( \psi'\left ( \frac{p_\theta}{p_{\alpha}} \right )
+
+\frac{p_\theta}{p_\alpha} - \psi^\sharp \left ( \frac{p_\theta}{p_{\alpha}} \right )
+
+\right ) p_{\theta_T}\\
+
+\phi(p_\theta, p_{\theta_T}) 
+& \geq &
+
+\int \psi' \left ( \frac{p_\theta}{p_\alpha} \right ) p_\theta - \int \psi^\sharp \left ( \frac{p_\theta}{p_\alpha} \right ) p_{\theta_T}
+
+\end{eqnarray}
+
+Le résultat étant vrai pour tout $\alpha$ et que $\theta_T$ est une valeur possible de $\alpha$, on obtient :
+$$ \phi(p_\theta, p_{\theta_T}) =
+\underset{\alpha}{sup}\; \int \psi' \left ( \frac{p_\theta}{p_\alpha} \right ) p_\theta - \int \psi^\sharp \left ( \frac{p_\theta}{p_\alpha} \right ) p_{\theta_T}
+$$
+
+Or par la loi des grands nombres, 
+
+$$
+\frac 1n \sum_{i=1}^n \psi^\sharp \left ( \frac{p_\theta}{p_\alpha}(X_i) \right ) \underset{n \rightarrow \infty}{\longrightarrow} \int \psi^\sharp \left ( \frac{p_\theta}{p_\alpha}\right )p_{\theta_T} 
+$$
+
+On pose $\phi_n(p_\theta, p_{\theta_T}) = \underset{\alpha}{sup} \; \psi' \left ( \frac{p_\theta}{p_\alpha} \right) p_\theta - \frac 1n \sum \psi^\sharp \left ( \frac{p_\theta}{p_\alpha} (X_i) \right )$, alors un bon estimateur est
+$$
+\hat{\theta} = \underset{\theta}{arginf}\; \phi_n(p_\theta, p_{\theta_T})
+$$
+
+En effet, si le modèle est identifiable, on a 
+$$
+\theta_T = \underset{\theta}{arginf}\; \phi(p_\theta, p_{\theta_T})
+$$
+
+Remarque : si on remplace $p_\alpha$ par $p_{n,h} =\frac{1}{nh} \sum_{i=1}^n K( \frac{X_i-x}{h}) \rightarrow P_{\theta_T}$ et que l'on note $\phi_n(p_\theta, p_{\theta_T}) = \int \psi ' \left ( \frac{p_\theta}p_{n,h} \right ) p_\theta - \frac 1n \sum \psi^\sharp \left ( \frac{p_\theta}p_{n,h}(X_i) \right )$. Alors l'estimateur définit par 
+$$ 
+\hat{\theta} = \underset{\theta}{arginf}\; \phi_n(p_\theta, p_{\theta_T}) 
+$$
+Est un estimateur consistent. 
+
+
+## Exemple d'implémentation
+
+On commence par définir l'estimateur à noyaux, on considère pour cela un noyau exponentiel :
+```{r}
+noyau <- function(x,data){
+  n <- length(data)
+  h <- 1.06 * sd(data) * (n**(-0.2) )
+  return( sum(sapply(data, function(y) dnorm( (x - y)/h  ) ) )/n/h )
+}
+```
+
+On définit maintenant des divergences :
+```{r}
+kl <- function(x){ x*log(x)-x+1}
+dkl <- function(x){ log(x) }
+
+vraisemblance <- function(x){ -log(x)+x-1}
+dvraisemblance <- function(x){ 1 - 1/x }
+```
+
+Et la fonction $\phi^ \#$ associée ainsi que les fonctions qui calculent le terme somme et le terme intégrale:
+```{r}
+phi_diese <- function(x,phi,dphi){ x*dphi(x)-phi(x)}
+
+# partie somme 
+summ <- function(phi,dphi,dens,data,param1,param2 = NULL){
+  if(is.null(param2)){
+    Y <- dens(data,param1) / noyau(data,data)
+  }
+  else{
+    Y <- dens(data,param1) / dens(data,param2) 
+
+  }
+  return( sum(phi_diese(Y,phi,dphi))/length(Y) )
+}
+
+# partie intégrale 
+inte <- function(phi,dphi,dens,data,param1,param2 = NULL, int_inf = 0,int_sup = 5){
+  if(is.null(param2) ){
+    g <- function(x,dphi,dens,param1,data,param2){
+      dphi( dens(x,param1) / noyau(x,data) )*dens(x,param1)
+    }
+    
+  }
+  else{
+    g <- function(x,dphi,dens,param1,data,param2){
+      dphi( dens(x,param1) / dens(x,param2) )*dens(x,param1)
+    }
+  }
+
+  quadv(g,dphi = dphi,dens = dens,data = data,param1 = param1,param2 = param2, a = int_inf ,b = int_sup )$Q
+}
+```
+
+On définie la fonction $\phi_n(p_\theta,p_{\theta_T})$ pour l'estimateur à noyau :
+```{r}
+div_noyau <- function(phi, dphi, dens, data, param1, int_inf = 0,int_sup = 5){
+  return( inte(phi, dphi, dens, data, param1, NULL, int_inf, int_sup ) - 
+            summ(phi,dphi,dens,data,param1,NULL) )
+}
+```
+
+On définie la fonction $\phi_n(p_\theta,p_{\theta_T})$ pour le cas classique :
+```{r}
+div_alpha <- function(phi,dphi,dens,data,param1,param2,int_inf = 0,int_sup = 5){
+  return( inte(phi, dphi, dens, data, param1, param2, int_inf, int_sup ) - 
+            summ(phi,dphi,dens,data,param1,param2) )
+}
+
+div_classic <- function(grid_seq, phi,dphi,dens,data,
+                        param1,param2, int_inf = 0,int_sup = 5){
+  
+#  cl <- makeCluster(min(detectCores()-1,1) )
+#  registerDoParallel(cl)
+
+  res <- sapply( grid_seq, function(param) 
+    div_alpha(phi,dphi,dens,data,param1,param, int_inf,int_sup) ) 
+  
+#  stopCluster(cl)
+  
+  return( max(res) )
+}
+```
+
+On définie la fonction qui réalise le calcul de l'argument de l'inf 
+```{r}
+
+div_estimator <- function(grid_inf,grid_sup, phi,dphi,dens,data,kernel=NULL, int_inf = 0,int_sup = 5,length_grid = 500){
+  
+  grid_seq <- seq(grid_inf,grid_sup,length.out = length_grid)
+  
+  if(is.null(kernel)){
+      res <- sapply(grid_seq, function(param) 
+        div_noyau(phi,dphi,dens,data,param,int_inf,int_sup ) )
+  }
+  else{
+      res <- sapply(grid_seq, function(param) 
+        div_classic(grid_seq, phi,dphi,dens,data, param, int_inf,int_sup) )
+  }
+  
+  argmin <- min( which(res == min(res) ) )
+  return( grid_seq[argmin] )
+}
+
+```
+
+On va mettre en application pour une loi normale de paramètre (0,1) (on suppose le paramètre de variance connu). 
+
+```{r}
+dens_f <- function(x,param){
+  dnorm(x,mean = param,sd=1)
+}
+
+set.seed(0)
+param <- -1
+data <- rnorm(100,mean = param) # générateur de loi normale à changer
+
+b_inf = -5
+b_sup = 5
+
+p_inf = -2
+p_sup = 0
+
+estim_noyau <- div_estimator(p_inf,p_sup, kl,dkl,dens_f,data, 
+                             int_inf = b_inf,int_sup = b_sup,length_grid = 200)
+
+estim_classic <- div_estimator(p_inf,p_sup, kl,dkl,dens_f,data,kernel = T, 
+                               int_inf = b_inf,int_sup = b_sup,length_grid = 200)
+
+print(paste("real param", param))
+print(paste("estim param noyau", estim_noyau))
+print(paste("estim param classic div", estim_classic))
+print(paste("estim param vrais",mean(data) ))
+
+```
+
+Remarque : existance du maximum de vraisemblance
+
+Le maximum de vraisemblance est défini comme l'$\underset{\theta \in \Theta}{argmax} \; \int ln( f_\theta(x)) f_{\theta_T}(x)dx$ (on suppose qu'il y a unicité). On va montrer qu'il existe et qu'il vaut $\theta_T$.
+
+\begin{eqnarray}
+\int ln( f_\theta(x)) f_{\theta_T}(x)dx
+& = & \int ln( \frac{f_\theta(x)}{f_{\theta_T}(x)} f_{\theta_T}(x) ) f_{\theta_T}(x)dx\\
+& = & \int ln( \frac{f_\theta(x)}{f_{\theta_T}(x)}) f_{\theta_T}(x)dx + \int ln(  f_{\theta_T}(x) ) f_{\theta_T}(x)dx\\
+& \overset{Jensen}{=} & ln \left (\int f_\theta(x)dx  \right ) + \int ln(  f_{\theta_T}(x) ) f_{\theta_T}(x)dx
+\end{eqnarray}
+
+D'où comme $f_\theta$ est une densité, on obtient bien le résultat voulu 
+$$ \int ln( f_\theta(x)) f_{\theta_T}(x)dx \leq \int ln(  f_{\theta_T}(x) ) f_{\theta_T}(x)dx$$
+
+# Resumé de l'article vu en cours sur le BIC [@bic]
+
+## Enoncé du problème
+
+On suppose que l'on dispose d'un échantillon $X = X_1,\dots,X_n \overset{iid}{\sim} P$. On souhaite déterminer la meilleure modélisation parmie une classe de modèles $(M_i)_{1 \leq i \leq m}$. On considère les modèles emboités, c'est à dire que $\forall \, 1 \leq i \leq m-1, \; M_i \in M_{i+1}$. 
+
+L'objectif est donc de déterminer 
+\begin{eqnarray*}
+P(M_i |X)
+\end{eqnarray*}
+
+Pour ce faire, on se place dans un contexte bayesien, au sens où l'on va considérer que $P(M_i) \sim Unif\{1,\dots,m \}$.
+De plus, pour chaque modèle $M_i$, on associe l'ensemble des paramètres possible $\Theta_i$ de dimension $K_i$ et l'on suppose connue $P(\theta_i |M_i), \; \forall \,  \theta_i \in \Theta_i$. 
+
+Avec ces notations, on écrit
+
+\begin{eqnarray*}
+P(X|M_i) = \int_{\Theta_i} g_{M_i}(X,\theta_i)P(\theta_i|M_i)d\theta_i
+\end{eqnarray*}
+Avec $g_{M_i}(X,.) = P(X |.,M_i)$
+
+En écrivant $g(\theta_i) = log(g_{M_i}(X,\theta_i)P(\theta_i|M_i) )$, on obtient alors
+\begin{eqnarray*}
+P(X|M_i) = \int_{\Theta_i} e^{g(\theta_i)}d\theta_i
+\end{eqnarray*}
+
+On peut alors appliquer la formule de Bayes à ce que l'on recherche, 
+\begin{eqnarray*}
+P(M_i|X) = \frac{P(X|M_i) \, P(M_i)}{P(x)}
+\end{eqnarray*}
+
+P(X) étant une constante, de même que $P(M_i)$, ce que l'on cherche à déterminer devient $P(X|M_i)$. 
+
+## Résolution du problème
+
+Notons la log vraisemblance de $\theta_i$ sous notre modèle $L_n(\theta_i)$,
+\begin{eqnarray*}
+L_n(\theta_i) = \frac{g(\theta_i)}{n} = \frac 1n \sum_{k=1}^n log(g_{M_i}(X_k,\theta_i)) + \frac{log(P(\theta_i|M_i))}{n}
+\end{eqnarray*}
+Ainsi que $\theta^*_i = \underset{\theta_i \in \Theta_i}{argmax} \; L_n(\theta_i)$ et $A_{\theta_i^*} = - \left( \left . \frac{\partial^2 L_n(\theta_i)}{\partial \theta_i^j \partial \theta_i^l} \right |_{\theta_i = \theta_i^*} \right)_{j,l}$
+
+En utilisant l'approximation de Laplace (cf plus loin), on obtient
+
+\begin{eqnarray*}
+P(X|M_i) = e^{g(\theta_i^*)} \left( \frac{2 \pi}{n} \right)^{K_i/2} |A_{\theta_i^*}|^{-1/2} + \mathcal{O}(\frac 1n)
+\end{eqnarray*}
+
+Ce qui revient en passant au logarithme à 
+\begin{eqnarray*}
+log(P(X|M_i)) = log(g_{M_i}(X,\theta_i^*)) + log(P(\theta_i^*|M_i)) \frac{K_i}{2} log(  \frac{2\pi}{n} )- \frac{1}{2} log(| A_{\theta_i^*}| ) + \mathcal{O}(\frac 1n)
+\end{eqnarray*}
+
+L'objectif devient alors de trouver $\theta_i^*$ et $A_{\theta_i^*}$
+
+Or Asymptotiquement, comme $g(\theta_i)$ ne varie que par $g_{M_i}(X,\theta_i)$ et que $P(\theta_i|M_i)$ reste constant,
+\begin{eqnarray*}
+\begin{array}{r c r}
+\hat{\theta}_i^* & \approx & \hat{\theta}_i = \underset{\theta_i \in \Theta_i}{argmax} \frac 1n g_{M_i}(X,\theta_i)\\
+A_{theta_i^*} & \approx &I_{\hat{\theta}_i} = - E \left [ \; \left . \frac{\partial^2 log(g_{M_i}(X_1,\theta_i))}{\partial \theta_i^j \partial \theta_i^l} \right |_{\theta_i = \hat{\theta}_i}  \right]_{j,l}
+\end{array}
+\end{eqnarray*}
+
+Finalement, 
+\begin{eqnarray*}
+log(P(X| M_i))  & = & log(g_{M_i} (X, \hat{\theta}_i)) - \frac{K_i}{2} log(n), \; \; \text{ terme qui tends vers moins l'infini quand n augmente}\\
+& + & log(P(\hat{\theta}_i|M_i)) + \frac{K_i}{n} log(2 \pi) - \frac{1}{2} log(|I_{\hat{\theta}_i}|) + \mathcal{O}(n^{-1/2}), \; \; \text{terme qui est un O(1)}
+\end{eqnarray*}
+
+Le critère BIC correspond donc à faire l'approximation (asymptotique) suivante 
+\begin{eqnarray*}
+log \, P(X|M_i) \approx log \, g_{M_i}(X,\hat{\theta}_i) - \frac{K_i}{2} log(n)
+\end{eqnarray*}
+
+Le modèle "optimal" $M_{BIC} est donc choisi tel que
+M_{BIC} = \underset{M_i}{argmin}\; BIC_i = \underset{M_i}{argmin} \; [ -2 log(g_{M_i}(X,\hat{\theta}_i)) + K_i log(n)]
+
+$\underline{Remarque :}$ on a choisi $P(M_i) \sim Unif$, mais on pourrait ajouter un a priori. On aurait alors le critère suivant
+\begin{eqnarray*}
+-2 log(g_{M_i}(X,\hat{\theta}_i)) + K_i log(n) - 2 log(P(M_i))
+\end{eqnarray*}
+
+$\underline{Remarque :}$ on aussi $P(M_i|X) \propto exp \left ( - \frac{1}{2} \Delta BIC_i \right )$. Où $\Delta BIC_i = BIC_i - BIC_{min}$.
+
+## Interprétation du BIC
+
+On note $d_{KL}(f,g)$ la distance de Kullbach-Leibler entre deux densités de probabilité f et g. On pose $d_{KL}(f,M_i) = \underset{\theta_i}{inf}\; d_{KL}(f,g_{M_i}(., \theta_i))$.
+
+On s'interesse au modèle quasi-vrai.
+
+Soit t l'indice minimale à partir duquel $d_{KL}$ de diminue plus
+
+On regarde $BIC_i - BIC_t$, $i \neq t$. Pour n grand, on a 
+\begin{eqnarray*}
+\begin{array}{r c l}
+BIC_i - BIC-t \approx 2n ( d_{KL}(f,M_i) - d_{KL}(f,M_t) ) + (K_i - K_t) log(n), \; si \; i < t\\
+BIC_i - BIC-t \approx - \chi^2_{K_i - K_t} + (K_i - K_t) log(n), \; si \; i > t
+\end{array}
+\end{eqnarray*}
+
+On a donc que le BIC assure la convergence en probabilité vers le quasi-modèle lorsque celui-ci est unique, ce qui n'est pas le cas de l'AIC. 
+
+Cependant, le quasi-modèle peut être très loin (au sens de KL) du vrai modèle. 
+
+A nouveau dans la comparaison entre l'AIC et le BIC, on peut noter que le BIC sélectionne des modèles de dimension plus petites que l'AIC à partir de n > 7. 
+
+## Annexe : Approximation de Laplace dans le cas indépendant de n et description de la généralisation
+
+Pour plus de simplicité, on montre le résultat uniquement pour une fonction définie sur $\mathbb{R}$.
+
+Soit L une fonction "assez régulière" pour que l'on puisse appliquer la formule de Taylor indépendante de n. On note $u^*$ sont maximum qui est supposé unique (par exemple pour une fonction concave).
+
+On a alors :
+$$L(u) = L(u^*) + (u - u^*)L'(u^*) + \frac{(u-u^*)^2}{2}L''(u^*) + o((u-u^*)^3)$$
+D'où avec $L'(u^*) = 0$,
+$$ \int_{\mathbb{R}} e^{nL(u)}du = e^{nL(u^*)} \int_{\mathbb{R}} e^{\frac n2 (u-u^*)^2L''(u^*)}e^{n \; o((u-u^*)^3)} du$$
+
+En utilisant le développement de l'exponentielle : $e^x = 1 +x+ \frac{x^2}{2} + o(x^3)$, on obtient alors :
+\begin{eqnarray}
+\int_{\mathbb{R}} e^{nL(u)}du 
+& = & \int_{\mathbb{R}} e^{\frac n2 (u-u^*)^2 L''(u^*)}\\
+& + & \int_{\mathbb{R}} \left [ o(n(u-u^*)^3) + o(n^2(u-u^*)^6) + o(n^3(u-u^*)^3 \right ] e^{\frac n2 (u-u^*)^2L''(u^*)}
+\end{eqnarray}
+
+En posant $\sigma = \frac{1}{\sqrt{- n L''(u^*)}}$ et $\nu = \frac{(u - u^*)}{\sigma}$, on a pour tout i entier positif : $\int_{\mathbb{R}} (u-u^*)^i e^{\frac n2 (u-u^*)^2L''(u^*)} = \sqrt{2 \pi} \sigma^{i+1} \int_{\mathbb{R}} \nu^i e^{- \frac{\nu^2}{2}}d \nu$.
+
+On reconnait alors le moment d'ordre i d'une variable aléatoire V de loi gaussienne centrée réduite à une constante près. On sait que les moments d'ordre impaires sont nuls, on obtient donc 
+$$ \int_{\mathbb{R}} e^{nL(u)}du = e^{n L(u^*)} \sqrt{2 \pi} \sigma \left [ E[V^0] + \int_{\mathbb{R}} o \left( \frac{\nu^6 n^2}{\sigma^6} \right)e^{ - \frac{\nu^2}{2} } d \nu \right ]$$
+Finalement, 
+$$ \int_{\mathbb{R}} e^{nL(u)}du = e^{n L(u^*)} \sqrt{ - \frac{2 \pi}{nL''(u^*)}} \left [ 1 + o( \frac 1n) \right ]$$
+D'où le résultat lorsque L ne dépend pas de n. 
+
+Lorsque c'est le cas, on doit supposer des conditions de régularité supplémentaire sur L de sorte que pour $\frac 1n \left [  \frac{5}{24} \frac{L^{(3)}(u^*)^2}{L''(u^*)^3} - \frac 18 \frac{L^{(4)}(u^*)}{L''(u ^*)^2} \right ] + o(n^{-2})$, le coefficient devant $\frac 1n$ reste borné en n (Tierney et Kadane 1986).
+
+# Autour du processus de Wiener
+
+## Simulation d'un processus de Wiener
+
+```{r warning=FALSE}
+set.seed(123)
+X <- rnorm(1000)
+
+wienerp <- function(t,ech){
+  n <- length(ech)
+  a <- floor(n*t)
+  if(a ==0){
+    return( ( (1/n - t) * ech[1]) * sqrt(n) )
+  }
+  s <- ( sum(ech[1:(a+1)])  - sum(ech[1:a]) ) * (t - a/n) + sum(ech[1:a])  #(t - a/n) * sum(ech[1:a]) + ((a + 1)/n - t) * sum(ech[1:(a+1)]) 
+  return(s * sqrt(n) )
+}
+
+x <- seq(0,1,length.out = 1000)
+Y <- unlist(sapply( x, function(y) wienerp(y,X) ))
+
+color_vec <- rainbow(5)
+
+graph <- ggplot()
+graph <- graph + geom_line(aes_string(x,Y), col = color_vec[1])
+
+for(i in 2:5){
+  X2 <- rnorm(1000)
+  Y2 <- unlist(sapply( x, function(y) wienerp(y,X2) ) )
+  graph <- graph + geom_line(aes_string(x,Y2), col = color_vec[i] )
+}
+
+graph <- graph + labs(title = "5 simulated Wiener process")
+print(graph)
+```
+
+## Mise en évidence de certaines propriétés du processus 
+
+### Convergence
+
+Mise en évidence de la propriété :
+$$ \frac{\tilde{S}_n}{\sqrt{n}}(t) \overset{d}{\longrightarrow} N(0,t)$$
+```{r}
+set.seed(123)
+k <- 1000
+t <- 0.4
+test <- replicate(k, wienerp(t,rnorm(1000) ) ) #/ sqrt(k)
+
+shap <- paste(" the shapiro wilks' pvalue is", round( shapiro.test(test)[["p.value"]],4),"\n" )
+
+#vari <- paste("the variance of the sample is",round(var(test),2),"it should be",t,"more or less", round(qchisq(0.95,k-1)/sqrt(k),1) )
+
+vari <- paste("the chi2 test that the variance is",t,"has a pvalue of",
+              round(varTest(test, sigma.squared = t)[["p.value"]],4) )
+
+x_p <- seq(min(test),max(test), length.out = 500 )
+y_p <- dnorm(x_p, mean(test),sd(test) )
+
+ggplot() + 
+  geom_histogram(aes(test, y = ..density..),bins = sqrt(length(test)) ) +
+  geom_line( aes(x_p,y_p), col = 'red') +
+  labs(title = paste(shap,vari,"\n one does not reject the null hypothesis if pvalue > level") )
+```
+
+On observe donc bien que la propriété est vérifiée.
+
+Remarque : pour simuler un Mouvement Brownien, il suffit de simuler k gaussiennes de moyenne 0 et de variance 1/k puis de faire la somme cumulée (plus rapide que la méthode précédente)
+
+### Caractérisation de l'argsup (vu en cours de Calcul Stochastique)
+
+Etude de la loi de l'argsup d'un processus de Wiener (doit suivre une loi arcsin) (principe de réflexion)
+```{r}
+set.seed(123)
+
+n <- 50000
+x <- seq(0,1,length.out = 1000)
+AS <- c()
+S <- c()
+for(k in 1:1000){
+  Y <- cumsum( rnorm(n,0,1/sqrt(k) ) )
+  AS <- c( AS, which(Y == max(Y, na.rm =  T) ) )
+  S <- c(S,max(Y))
+}
+
+g1 <- ggplot() +
+  geom_histogram(aes(AS/n, y = ..density..),bins = 30) +
+  geom_line(aes(x, darcsine(x)), col = 'red') +
+  labs(title = "histogram and true distribution of the argsup of a Brownian Motion on [0,1]")
+
+z <- seq(0, max(S) , length.out = 500)/n
+g2 <- ggplot()+
+  geom_histogram(aes(S,y = ..density..),bins = 30) + #should be the same as |N(0,1)|
+  #geom_line(aes(z, 2*dnorm(z,sd=20) ),col ='red' ) +
+  labs(title = "histogram of the sup of a Brownian Motion on [0,1]")
+
+plot_grid(g1,g2)
+```
+
+On affiche l'histogramme et la vraie distribution de l'argsup du mouvement bronien à gauche et la distribution du sup du mouvement brownian à droite.
+
+## Exemple d'utilisation du processus de Wiener : test de nullité d'effets dépendant du temps
+
+Dans les modèles de survie, il est souvent supposé que les covariables n'évoluent pas avec le temps (modèles de Weibull, modèle de Cox).
+
+Cependant, dans plusieurs cas, par exemple dans les essais cliniques, il est très courrant que les effets des covariables changent avec le temps. Par exemple si on souhaite tester les effets d'un médicament, il est probable que l'on observe pas d'effet au début. Puis à partir d'un moment, on peut observer des effets (positifs ou négatifs). L'effet des covariables évolue donc avec le temps. Cela nécessite une modélisation particulière. 
+On peut aussi si on considère que les covariables représentent l'état des patients d'un effet clinique (en bonne santé, un peu malade, en état critique, etc).
+
+On considère alors le modèle suivant : 
+$$
+\lambda(t |Z(t)) = \lambda_0(t) exp \{\beta(t)Z(t) \}
+$$
+Avec $\lambda(t|\cdot)$ la fonction de hasard conditionelle, $\lambda_0(t)$la fonction de hasard de référence, $\beta(t)$ les effets des covariables et $Z(t)$ les covariables. 
+
+L'objectif est de tester $H_0 \; : \; \beta(t) = 0, \forall t$ contre des hypothèses telles que $H_1 : \exists \; t,\; \beta(t) \neq 0$ ou encore $H_1: \int \beta(t) dF(t) \neq 0$.
+
+Il est possible de montrer [@survival (2012)] qu'un tel test pouvait être construit en se basant sur le mouvement Brownien. En particulier, sous l'hypothèse $H_0$, la statistique de test ci-dessous a pour distribution un mouvement Brownien unitaire, alors qu'en dehors de l'hypothèse $H_0$, la loi de la statistique de test suit un mouvement Brownien avec dérive. 
+
+
+# Importance Sampling
+
+## Mise en évidence de la différence entre théorie et pratique
+
+On cherche à estimer $P(X \in A)$ ou A est un évènement rare, par exemple $P(X \in A) \leq 10^{-3}$. 
+
+L'approche naïve par Monte Carlo n'est pas très intelligente car du fait de la rareté de l'évènement, il faut un nombre énorme d'échantillon pour avoir une bonne approximation.
+
+L'idée est alors d'utiliser "un changement de distribution". 
+
+En effet, on a :
+$$G = E_P \left [ 1_A(X) \right ] = E_R \left [ 1_A(Y) \; \frac{dP}{dR}(Y)\right ]$$
+Pour peut que P << R.
+
+L'idéal est donc de prendre R telle que $P_R(Y \in A)$ soit importante. De sorte que l'estimateur soit meilleur.
+
+Plus exactement, on souhaite réduire au maximum la variance de notre estimateur. Notons $W = \frac{P}{R^*} * 1_A$ ou $R^*$ est la loi optimale. On a alors $var^*(\hat{G_n}) = \frac{var^*(W(X))}{n}$ avec $var^*(W(X)) = var^* \left[ \frac{P(X)}{R^*(X)} 1_A \right] = \int_A \left [ \frac{P(x)}{R^*(x)}  \right ]^2 R^*(x)dx - G^2$
+
+La minimisation de cette quantité en R donne 
+$$R^* =  \frac{ |P|}{\int_A |P(x)|dx}$$
+Or le dénominateur est justement ce que l'on cherche à déterminer. On ne peut donc pas utiliser ce résultat.
+
+On doit donc chercher une approximation de la loi optimale. Ce qui peut se faire en minimisant la distance de Kullbach comme on l'a vu en cours. 
+
+## Exemple de résolution d'un problème d'optimisation par simulation
+
+On souhaite calculer $\underset{y > x}{min} \; \frac{y^2}{2}$. 
+
+Dans le cours, on a vu que $- \underset{y > x}{min} \; \frac{y^2}{2} = \underset{n \rightarrow \infty}{lim} \; \frac 1n log(P( \frac{S_n}{n} > x))$, où $S_n = \sum_{i=1}^n X_i$ où les $X_i$ sont des variables normales standards.
+
+Il faut donc estimer $P( Y > x)$ avec $Y \sim N(0, \frac 1n )$ avec n grand.
+Pour cela on peut utiliser l'Importance Sampling. 
+
+```{r}
+#correction correspondant à la dérivée de Radon Nikodym
+correction <- function(z,y,n){
+  return( exp(-z * y/n + 0.5*z*z/n) )
+}
+
+importance_sampling <- function(x,z,n,nb_simu = 10000){
+  y <- rnorm(nb_simu,z, 1/n )
+  return( mean( (y > x) * correction(z,y,n)  ) )
+}
+
+x <- 3
+n <- 100
+true_res <- x*x / 2
+z <- n * x # biais pour les simulations (pour plus d'efficacité,il faudrait calculer la véritable loi optimale)
+simu_res <- - log( importance_sampling(x,z,n) )/ n
+
+
+print(paste("Pour x =",x,"et n =",n,": le résultat attendu est",true_res,"le resultat obtenu est", simu_res))
+```
+
+
+# Quelques démonstrations 
+
+## Théorème de Wilks
+
+On rappelle une propriété importante du maximum de vraisemblance :
+
+$\underline{Théorème :}$ Soit $\Theta \in \mathbb{R}^d$, l'ensemble des paramètres. On suppose que l'estimateur du maximum de vraisemblance $\hat{\theta}_n$ converge en probabilité vers $\theta_*$ intérieur à $\Theta$ et que $I(\theta_*)$ est inversible. De plus, il existe un voisinage V de $\theta_*$ sur lequel pour presque tout y, la log-vraisemblance $L(\theta,y)$ est $C^2$ avec $E_{\theta_*}[ \;\underset{\theta \in V}{ | \nabla^2 \; L(\theta,Y)   | } \;] < \infty$\\
+On pose J = $E_{\theta_*}[ \;\underset{\theta \in V}{  \nabla^2 \; L(\theta,Y)} \;] < \infty$ que l'on suppose inversible.
+
+Alors, $\sqrt{n}( \hat{\theta}_n - \theta_*) \overset{d}{\underset{n\rightarrow \infty}{\longrightarrow}} N(0, J^{-1} I(\theta_*) J^{-1} )$
+
+De plus si on a:
+V ouvert , $\mu-p.s.$ $\theta \rightarrow L(\theta,y)$ est deux fois dérivable sur V et 
+$\int \underset{\theta \in V}{sup} \| \nabla^2_\theta p_\theta(y) \| \mu(dy) < \infty$
+
+On a 
+\begin{eqnarray}
+I(\theta_*) = - E_{\theta_*}[ \;\underset{\theta_* \in V}{  \nabla^2 \; L(\theta,Y)} \;]
+\end{eqnarray}
+
+Donc 
+\begin{eqnarray}
+\sqrt{n}( \hat{\theta}_n - \theta_*) \overset{d}{\underset{n\rightarrow \infty}{\longrightarrow}} N(0, I(\theta_*)^{-1} )
+\end{eqnarray}
+
+$\underline{Théorème :}$ sous les conditions du théorème ci-dessus, en notant m la dimension de $\theta$, on a 
+\begin{eqnarray}
+2 \left ( \sum_{i=1}^n L(\hat{\theta}_n,Y_i) - L(\theta_*,Y_i)  \right ) \overset{P}{\underset{n\rightarrow \infty}{\longrightarrow}} \chi^2(m)
+\end{eqnarray}
+
+$\underline{Démonstration :}$ Remarquons d'abord que la dérivée de $\sum_{i=1}^n L(\theta,Y_i)$ en $\hat{\theta}_n$ s'annule. Le développement de Taylor à l'ordre 2 en $\hat{\theta}_n$ s'écrit alors pour un certain $\theta_n' \in [ \hat{\theta}_n \; , \; \theta_* ]$ :
+\begin{eqnarray}
+2 \left ( \sum_{i=1}^n L(\hat{\theta}_n,Y_i) - L(\theta_*,Y_i)  \right ) 
+& = & - ( \hat{\theta}_n - \theta_*)^T ( \sum_{i=1}^n \nabla^2_\theta L(\theta_n',Y_i)) \; ( \hat{\theta}_n - \theta_*)\\
+& = & \sqrt(n) ( \hat{\theta}_n - \theta_*)^T (I(\theta_*) + r_n ) \sqrt{n} ( \hat{\theta}_n - \theta_*)
+\end{eqnarray}
+
+Le reste $r_n$ tend en loi vers 0. D'après le théorème précédent, $\sqrt{n}( \hat{\theta}_n - \theta_*) \overset{d}{\underset{n\rightarrow \infty}{\longrightarrow}} N(0, I(\theta_*)^{-1} )$, on obtient le résultat voulu. 
+
+$\underline{\text{Théorème de Wilks :}}$ Toujours sous les mêmes hypothèses, on considère un estimateur sous contrainte :
+\begin{eqnarray}
+\hat{\theta}^c_n = \underset{g(\theta) = 0}{armin} \sum_{i=1}^n L(\hat{\theta}_n, Y_i)
+\end{eqnarray}
+
+On suppose de plus que $g(\theta_*) = 0$ et que g est $C^1(V_{int}(\theta_*),\mathbb{R}^m)$ et $\nabla g$ est de rang m sur ce voisinage. Alors, 
+
+\begin{eqnarray}
+2 \left ( \sum_{i=1}^n L(\hat{\theta}_n,Y_i) - L(\hat{\theta}^c_n,Y_i)  \right ) \overset{P}{\underset{n\rightarrow \infty}{\longrightarrow}} \chi^2(m)
+\end{eqnarray}
+
+Au lieu de démontrer ce théorème directement, on va démontrer une version plus générale. Pour cela on a besoin d'établir un peu de contexte sur l'estimation sous contrainte. 
+
+Si l'on sait que $\theta_*$ satisfait une équation du type $g(\theta_*) = 0$ on définit le minimum de contraste sous contraintes :
+\begin{eqnarray}
+\hat{\theta}^c_n = \underset{g(\theta) =0}{argmin} \sum_{i=1}^n K_n(\theta)
+\end{eqnarray}
+
+Avec par exemple $K_n(\theta) = \frac 1n \sum_{i=1}^n K(\theta,Y_i)$ ou $K_n(\theta) = (\hat{\theta}_n - \theta)^T S (\hat{\theta}_n - \theta)$ (S une matrice). 
+
+$\underline{Théorème :}$ On suppose que les fonctions $K_n$ convergent uniformément sur $\Theta$ vers une fonction $k(\theta)$ ayant un unique minimum $\theta_*$ sur $\Theta$, que $g(\theta_*) = 0$ et que g est continue. Alors, $\hat{\theta}^c_n$ le minimum de contraste sous contrainte converge presque sûrement vers $\theta_*$. 
+
+$\underline{Remarque :}$ si g et $K_n$ sont $C^1$ et si $\hat{\theta}^c_n$ est intérieur à $\Theta$, on a $\nabla K_n(\hat{\theta}^c_n) + \lambda_n^T \nabla g(\hat{\theta}^c_n) =0$ et $g(\hat{\theta}^c_n) = 0$ où $\lambda_n$ est le multiplicateur de Lagrange. 
+
+$\underline{Théorème :}$ on se place sous les hypothèses du théorème précédent. On suppose de plus que $g(\theta_*) = 0$ et que g est $C^1(V_{int}(\theta_*),\mathbb{R}^m)$ et $\nabla g$ est de rang m sur ce voisinage et qu'il existe un voisinage compact $\Theta_*$ de $\theta_*$ tel que presque sûrement la fonction $\theta \rightarrow K_n(\theta)$ est $C^2$ sur $\Theta_*$ et les fonctions $\theta \rightarrow \nabla^2 K_n(\theta)$ y convergent uniformément vers $\nabla^2 k$
+
+Alors la suite $(\hat{\theta}^c_n, \lambda_n)$ converge presque sûrement vers $(\theta_*,0)$. Posons 
+\begin{eqnarray}
+J = \nabla^2 k(\theta_*), \; G = \nabla g(\theta_*), \; J' = \begin{pmatrix} J & G^T\\ G & 0 \end{pmatrix}
+\end{eqnarray}
+
+Si $\sqrt{n} \nabla K_n(\theta_*)$ converge en loi vers une certaine limite et si J' est inversible (en particulier J > 0 suffit car G est de rang plein), alors en notant $\hat{\theta}_n$ est l'estimateur sans contrainte, 
+\begin{eqnarray}
+J' \begin{pmatrix} \hat{\theta}^c_n - \theta_* \\ \lambda_n \end{pmatrix} 
+= \begin{pmatrix} - \nabla K_n(\theta_*)^T\\ 0 \end{pmatrix} + \frac{r_n}{\sqrt{n}} 
+= \begin{pmatrix} J(\hat{\theta}_n - \theta_*)\\ 0 \end{pmatrix} + \frac{r_n'}{\sqrt{n}}
+\end{eqnarray}
+
+Avec $(r_n, r_n') \overset{P}{\longrightarrow} O$. On a en particulier :
+\begin{eqnarray}
+\hat{\theta}^c_n - \theta_* = P(\hat{\theta}_n - \theta_*) + \frac{r_n''}{\sqrt{n}}
+\end{eqnarray}
+
+Où P est le projecteur sur l'espace linéarisé au voisinage de $\theta_*$: $P = Id - J^{-1} G^T(GJ^{-1}G^T)^{-1}G$. 
+
+En particulier, si $\sqrt{n} \nabla K_n(\theta_*) \rightarrow N(0,I)$ en loi, alors $\sqrt{n}(\hat{\theta}^c_n - \theta_*) \rightarrow N(0,V_c)$ en loi avec : $V_c = PJ^{-1}IJ^{-1}P^T$. 
+
+Le théorème suivant, en plus d'offir une démonstration au théorème de Wilks, permet de construire une statistique de test pour l'hypothèse $H_0 : g(\theta_*) = 0$. On se place pour cela dans le cas I = J ( ce qui est le cas pour le maximum de vraisemblance)
+
+$\underline{Théorème :}$ sous les conditions du théorème précédent, avec $J = \nabla^2 k(\theta_*). Si $\sqrt{n} \nabla K_n(\theta_*)$ converge en loi vers N(0,J), alors 
+\begin{eqnarray}
+2n \left( K_n ( \hat{\theta}^c_n) - K_n (\hat{\theta}_n) \right) \rightarrow \chi^2(m) 
+\end{eqnarray}
+Avec m la dimension de g.
+
+$\underline{Démonstration :}$ En appliquant le théorème précédent, on obtient 
+\begin{eqnarray}
+\hat{\theta}^c_n - \hat{\theta}_n 
+& = & -(Id-P)(\hat{\theta}_n - \theta_*) + \frac{r_n''}{\sqrt{n}}\\
+& = & -J^{-1} G^T(GJ^{-1}G^T)^{-1}G(\hat{\theta}_n - \theta_*) + \frac{r_n''}{\sqrt{n}}
+\end{eqnarray}
+
+Comme $\hat{\theta}_n - \theta_* = n^{-1/2} J^{-1/2}X_n$ avec $X_n \rightarrow N(0,Id)$, il vient 
+\begin{eqnarray}
+\sqrt{n}(\hat{\theta}^c_n - \hat{\theta}_n) = - J^{-1}G^T(GJ^{-1}G^T)^{-1}GJ^{-1/2}X_n + r_n''
+\end{eqnarray}
+
+De plus, la formule de Taylor au voisinage de $\hat{\theta}_n$ donne, pour un certain $\theta_n'$ du segment $[\hat{\theta}, \; \hat{\theta}^c_n]$,
+\begin{eqnarray}
+2n \left( K_n(\hat{\theta}^c_n - K_n(\hat{\theta}_n)) \right)
+& = & n(\hat{\theta}_n - \hat{\theta}^c_n)^T \nabla^2_\theta K_n(\theta_n')(\hat{\theta}_n - \hat{\theta}^c_n)\\
+& = & \sqrt{n} (\hat{\theta} - \hat{\theta}^c_n)^T (J + r_n) \sqrt{n} (\hat{\theta}_n - \hat{\theta}^c_n)
+\end{eqnarray}
+
+En remplaçant, on trouve que la loi limite est la même que celle de 
+\begin{eqnarray}
+X_n^T J^{-1/2}G^T(GJ^{-1}G^T)^{-1}GJ^{-1}G^T(GJ^{-1}G^T)^{-1}GJ^{-1/2}X_n 
+= X_n^T J^{-1/2}G^T(GJ^{-1}G^T)^{-1}GJ^{-1/2}X_n
+\end{eqnarray}
+
+Qui est le carré de la norme de $PX_n$, $p = (GJ^{-1}G^T)^{-1/2}GJ^{-1/2}$. Comme $PP^T = Id_m$, la loi de $PX_\infty$ si $X_\infty \sim N(0,Id_d)$ est $N(0,Id_m)$. par conséquent, $PX_n$, converge en loi vers $N(O,Id_m)$, d'où le résultat. 
+
+## Lemme de symétrisation
+
+Ce résultat est notamment utilisé lors de la démonstration de la demonstration du théorème de Glivenko-Cantelli.
+
+Soit $X=(X_1, \dots, X_n)$ et $Y =(Y_1, \dots, Y_n)$ deux échantillons indépendants. Supposons de plus qu'il existe deux constantes $\alpha$ et $\beta$ telles que $P(|Y_i| \leq \alpha) \geq \beta$ pour tout i. Alors 
+$$ P \left( \underset{1 \leq i \leq n}{sup} |X_i| > \epsilon \right) \leq \beta^{-1} P \left(\underset{1 \leq i \leq n}{sup} |X_i - Y_i| > \epsilon - \alpha \right)$$
+Soit $\tau$ aléatoire tel que $|X_\tau | > \epsilon$ (on suppose n assez grand pour que cela arrive). Par construction, $\tau$ est indépendant de Y, on peut donc écire $P(|Y_\tau| \leq \alpha | X) \geq \beta$
+Alors en intégrant, on obtient
+\begin{eqnarray}
+\beta P \left( \underset{1 \leq i \leq n}{sup} |X_i| > \epsilon \right) 
+& \leq & P( |Y_\tau| \leq \alpha , |X_\tau| > \epsilon)\\
+& \leq & P( | Y_\tau - X_\tau | > \epsilon - \alpha)\\
+& \leq & P \left( \underset{1 \leq i \leq n}{sup} |X_i - Y_i| > \epsilon - \alpha \right)
+\end{eqnarray}
+
+## Théorème d'Arzela-Ascoli
+
+Soit (X,d) un espace métrique compact et (X',d') un espace métrique; Soit E une partie de $C^0(X,X')$.
+
+On dit que E est equicontinue si:
+$$\forall x \in X, \; \forall \epsilon > 0, \; \exists \eta > 0, \; \forall y \in X, \; \forall f \in E, \; d(x,y) < \eta \Longrightarrow d'(f(x),f(y)) < \epsilon$$
+
+Théorème d'Ascoli : E est relativement compact pour la topologie de la convergence uniforme si et seulement si E est equicontinue et ponctuellement relativement compacte.
+
+Démonstration :
+$\Rightarrow$ : Soit $x \in X$, on note $E(x) = \{ f(x) | f \in E \}$. Montrons que E est relativement compact. 
+Soit 
+
+$\begin{array}{r c l} \phi_x : C^0(X,X') & \rightarrow & X'\\ f & \mapsto & f(x) \end{array}$
+
+Elle est 1-lipschitzienne, donc continue, donc $\bar{E}(x) = \phi_x(\bar{E})$ est compact (car par hypothèse E est relativement compact). 
+Or $\bar{E(x)} \subset \bar{E}(x)$ et $\bar{E(x)}$ est fermé, donc compact. 
+
+E est compact donc en particulier, E est précompact.
+Soit $x \in X, \; \epsilon > 0$ et $f_1,\dots,f_N \in E$ tels que $E \subset \cup_{i=1}^n B(f_i,\epsilon)$.
+
+Pour tout i, $f_i$ est continue en x, donc $\exists \eta_i >0, \; \forall y \in X, \; d(x,y) < \eta_i \Longrightarrow d'(f_i(x),f_i(y)) < \epsilon$. On pose alors $\eta = \underset{i}{min} \; \eta_i$, et on a
+$$ \forall i, \; \forall y \in X, \; d(x,y) < \eta \Longrightarrow d'(f_i(x),f_i(y)) < \epsilon $$
+Soit désormais $f\in E$, alors il existe i tel que $d_\infty(f,f_i) < \epsilon$. Soit $y \in X$ tel que $d(x,y) < \eta$, alors :
+$$ d'(f(x),f(y)) \leq d'(f(x),f_i(x)) + d'(f_i(x),f_i(y)) + d'(f_i(y),f(y)) \leq 3 \epsilon$$
+Donc E est équicontinue.
+
+$\Leftarrow$ : Soit $(f_n)_{n \in \mathbb{N}}$ une suite d'éléments de E. Le but est de montrer qu'il existe une sous-suite de $(f_n)_{n \in \mathbb{N}}$ qui converge dans $(C^0(X,X'), d_\infty)$.
+
+X est compact donc X est séparable. Soit $D = \{ x_k | x \in \mathbb{N} \}$, dense dans X. E est ponctuellement relativement compact donc pour tout $k \in \mathbb{N}$, il existe $K_k \subset X'$ compact tel que $(f_n(x_k))_{n \in \mathbb{N}} \subset K_k$.
+
+$(f_{n / D})_{n \in \mathbb{N}}$ est une suite de $\prod_{k \in \mathbb{N}}K_k$ compact par le théorème de Tykhonov, donc il existe une sous-suite $(f_{n_l})_{l \in \mathbb{l}}$ qui converge ponctuellement sur D.
+
+Montrons maintenant que $(f_{n_l}(x))_{l \in \mathbb{l}}$ est de Cauchy pour tout $x \in X$. 
+Soit $\epsilon > 0$, alors par équicontinuité de E, il existe $\eta > 0$ tel que :
+$$ \forall x,y \in X, \; \forall l \in \mathbb{N}, \; d(x,y) < \eta \Rightarrow d'(f_{n_l}(x), f_{n_l}(y)) < \epsilon$$
+Soit $x \in X$, D est dense, donc il existe k tel que $d(x, x_k) < \eta$. $(f_{n_l}(x_k))_{l \in \mathbb{l}}$ converge donc et est de Cauchy : 
+$$ \exists L_k, \; \forall l, l' \geq L_k, \; d'(f_{n_l}(x_k),f_{n_{l'}}(x_k)) < \epsilon$$
+D'où pour tout $l,l' \geq L_k$, 
+$$ d'(f_{n_l}(x),f_{n_{l'}}(x)) \leq d'(f_{n_l}(x),f_{n_{l}}(x_k)) + d'(f_{n_l}(x_k),f_{n_{l'}}(x_k)) + d'(f_{n_{l'}}(x_k),f_{n_{l'}}(x)) < 3 \epsilon$$
+Donc $(f_{n_l}(x))_{l \in \mathbb{l}}$ est de Cauchy et $\bar{E(x)}$ est compact donc aussi complet, donc $(f_{n_l}(x))_{l \in \mathbb{l}}$ converge dans (X',d') vers $f(x)$ pour tout $x \in X$. 
+
+Il reste à montrer que la convergence est uniforme. En conservant les notations précédentes, il existe $N \in \mathbb{N}$ tel que $X \subset \cup_{k=0}^N B(x_k, \eta)$.
+
+On pose $L = \underset{0 \leq k \leq N}{L_k}$, on a alors :
+$$ \forall l,l' \geq L, \; \forall x \in X, \; d'(f_{n_l}(x), f_{n_{l'}}(x)) < 3 \epsilon$$
+En faisant tendre l' vers l'infini, on obtient :
+$$ \forall l \geq L, \; d_\infty(f_{n_l},f) < 3 \epsilon$$
+
+
+# Bibliographie
+
